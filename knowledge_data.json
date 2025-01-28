@@ -1,0 +1,55 @@
+{
+    "nodes": [
+      {
+        "id": "1",
+        "name": "Paris",
+        "type": "City",
+        "attributes": {
+          "country": "France",
+          "known_for": ["Eiffel Tower", "Louvre Museum"]
+        }
+      },
+      {
+        "id": "2",
+        "name": "France",
+        "type": "Country",
+        "attributes": {
+          "capital": "Paris",
+          "continent": "Europe"
+        }
+      },
+      {
+        "id": "3",
+        "name": "George Orwell",
+        "type": "Person",
+        "attributes": {
+          "born": "1903",
+          "died": "1950",
+          "works": ["1984", "Animal Farm"]
+        }
+      },
+      {
+        "id": "4",
+        "name": "1984",
+        "type": "Book",
+        "attributes": {
+          "author": "George Orwell",
+          "genre": "Dystopian Fiction",
+          "published": "1949"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "source": "1",
+        "target": "2",
+        "relation": "is the capital of"
+      },
+      {
+        "source": "4",
+        "target": "3",
+        "relation": "written by"
+      }
+    ]
+  }
+  
