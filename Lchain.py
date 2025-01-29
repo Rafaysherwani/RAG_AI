@@ -9,6 +9,7 @@ load_dotenv()
 import os
 # Set your OpenAI API key
 os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
+
 # Define the prompt template
 prompt = PromptTemplate.from_template("What is the capital of {country}?")
 
