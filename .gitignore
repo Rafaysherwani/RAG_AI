@@ -1,4 +1,12 @@
 .env/
 
 .venv/
-/RAG
+
+test.py/
+
+RAG/
+knowledge_data.json
+.env
+knowledge_data.json
+test.py
+test.py
