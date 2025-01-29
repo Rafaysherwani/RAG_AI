@@ -1,94 +1,130 @@
+import os
+import pinecone
+from typing import TypedDict
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_pinecone import PineconeVectorStore  
+from langgraph.graph import StateGraph, START, END
+from pinecone import Pinecone, ServerlessSpec
 from dotenv import load_dotenv
-import openai
-from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings.openai import OpenAIEmbeddings
-from langchain_community.llms import OpenAI
-from langchain.chains import RetrievalQA
-from langgraph.agent import GraphAgent
-from langgraph.utils import build_knowledge_graph
-from langchain.evaluation.qa import QAEvaluator
-from sklearn.metrics import accuracy_score
 
 load_dotenv()
 
-# Retrieve keys
-import os
-os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
+# Get API keys from environment variables
 
-# Task 1: Build Agentic RAG with Evaluation Procedure
-# ---------------------------------------------
-# Step 1: Initialize the Vector Store and Embeddings
+os.environ["PINECONE_API_KEY"] = os.get.env("PINECONE_API_KEY")
+os.environ["PINECONE_ENV"] = os.get.env("PINECONE_ENV")
+os.environ["OPENAI_API_KEY"] = os.get.env("OPENAI_API_KEY")
+
+# Initialize Pinecone
+def initialize_pinecone(index_name):
+    pc = Pinecone(
+        api_key=os.getenv("PINECONE_API_KEY"),
+        environment=os.getenv("PINECONE_ENV")
+    )
+    return pc
+
+class State(TypedDict):
+    query: str
+    embedding: list
+    context: str
+    response: str
+
+# Initialize components
+llm = ChatOpenAI(model_name="gpt-4", temperature=0)
 embeddings = OpenAIEmbeddings()
-vector_store = FAISS.load_local("path_to_your_vectorstore", embeddings)
 
-# Step 2: Initialize the LLM
-llm = OpenAI(model="gpt-4")
+# Initialize Pinecone
+index_name = "example-index"
+dimension = 1536  # OpenAI embedding size
 
-# Step 3: Define RAG-based Retrieval Pipeline
-retrieval_qa_chain = RetrievalQA.from_chain_type(llm=llm, retriever=vector_store.as_retriever())
+pc = initialize_pinecone(index_name)
+if index_name not in pc.list_indexes().names():
+    pc.create_index(
+        name=index_name,
+        dimension=dimension,
+        metric="cosine",
+        spec=ServerlessSpec(
+            cloud="aws",
+            region=os.environ.get("PINECONE_ENV")
+        )
+    )
 
-# Step 4: Create Knowledge Graph for Agent
-knowledge_graph = build_knowledge_graph("knowledge_data.json")  # Provide your JSON data.
-agent = GraphAgent(knowledge_graph, retrieval_qa_chain)
+index = pc.Index(index_name)
 
-# Step 5: RAG Agent Functionality
-def rag_agent_query(query):
-    response = agent.run(query)
-    return response
+# Initialize vectorstore
+vectorstore = PineconeVectorStore(
+    index=index,
+    embedding=embeddings,
+    text_key="text"
+)
 
+# Initialize the StateGraph
+graph_builder = StateGraph(State)
 
-# Task 2: Build a Basic RAG Pipeline
-# ----------------------------------
-# Step 1: Basic Retrieval Pipeline
-def build_basic_rag_pipeline(query, vector_store, llm):
-    retriever = vector_store.as_retriever()
-    docs = retriever.get_relevant_documents(query)
+# 1. Embedding Node
+def embedding_node(state: State):
+    """Generate embedding for the query."""
+    state["embedding"] = embeddings.embed_query(state["query"])
+    return state
+
+graph_builder.add_node("embed_query", embedding_node)
+
+# 2. Retrieval Node
+def retrieval_node(state: State):
+    """Retrieve relevant documents from Pinecone."""
+    results = vectorstore.similarity_search(state["query"], k=3)
+    state["context"] = " ".join([doc.page_content for doc in results])
+    return state
+
+graph_builder.add_node("retrieve_context", retrieval_node)
+
+# 3. Processing Node
+def processing_node(state: State):
+    """Process or clean the retrieved context."""
+    max_length = 1000
+    state["context"] = state["context"][:max_length]
+    return state
+
+graph_builder.add_node("process_context", processing_node)
+
+# 4. Generation Node
+def generation_node(state: State):
+    """Generate a response using the LLM."""
+    prompt = (
+        "Answer the following question based on the context below. "
+        "If the answer is not in the context, say so.\n\n"
+        f"Context: {state['context']}\n\nQuestion: {state['query']}\nAnswer:"
+    )
+    response = llm.invoke(prompt)
     
-    # Generate answers based on retrieved documents
-    context = "\n".join([doc.page_content for doc in docs])
-    answer = llm("Answer the question based on this context: \n" + context + f"\n\nQuestion: {query}")
-    return answer
+    # Extract only the actual text response
+    state["response"] = response.content if hasattr(response, "content") else str(response)
+    
+    return state
 
-# Example Usage
-query = "What is the capital of France?"
-answer = build_basic_rag_pipeline(query, vector_store, llm)
-print("Basic RAG Answer:", answer)
+graph_builder.add_node("generate_response", generation_node)
 
+# Define Edges
+graph_builder.add_edge(START, "embed_query")
+graph_builder.add_edge("embed_query", "retrieve_context")
+graph_builder.add_edge("retrieve_context", "process_context")
+graph_builder.add_edge("process_context", "generate_response")
+graph_builder.add_edge("generate_response", END)
 
-# Task 3: Evaluation Procedure for RAG Results
-# ---------------------------------------------
-def evaluate_rag_results(test_data, vector_store, llm):
-    evaluator = QAEvaluator()
+# Compile the graph
+graph = graph_builder.compile()
 
-    y_true = []
-    y_pred = []
-
-    for query, expected_answer in test_data.items():
-        # Use the retrieval-augmented generation pipeline
-        prediction = build_basic_rag_pipeline(query, vector_store, llm)
-
-        # Evaluate and store the results
-        y_true.append(expected_answer)
-        y_pred.append(prediction)
-
-    # Compute metrics
-    accuracy = accuracy_score(y_true, y_pred)
-    print("RAG Evaluation Accuracy:", accuracy)
-
-    # Optionally, return detailed evaluation results
-    return {
-        "accuracy": accuracy,
-        "true_answers": y_true,
-        "predicted_answers": y_pred
+def query_rag(query: str) -> dict:
+    """Function to query the RAG system"""
+    initial_state = {
+        "query": query,
+        "embedding": [],
+        "context": "",
+        "response": ""
     }
+    return graph.invoke(initial_state)
 
-# Example Evaluation Dataset
-test_data = {
-    "What is the capital of France?": "Paris",
-    "Who wrote '1984'?": "George Orwell",
-}
-
-# Evaluate
-results = evaluate_rag_results(test_data, vector_store, llm)
-print("Evaluation Results:", results)
-
+if __name__ == "__main__":
+    result = query_rag("What is AI?")
+    print(f"Query: What is AI?")
+    print(f"Response: {result['response']}")
